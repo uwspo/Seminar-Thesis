@@ -1,10 +1,10 @@
-#For Multithreading, speeds up the complexity
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from functools import partial
 
 from NeuralNetwork import NN, MLP, TinyCNN
-from SGD1 import stochastic_gradient_descent, rss, mse
+
+from SGD import stochastic_gradient_descent, rss, mse
 from typing import List
 from αEstimator import hill_α_estimator_Bootstrap_mse
 
@@ -31,10 +31,6 @@ X = A @ x0
 η1, η2, η3, η4, η5 = 0.01, 0.3, 0.1, 0.001, 0.0003
 b = 32
 
-"""
-Resets all random seeds. 
-Used to ensure indenpendent Runs.
-"""
 def reseed(seed: int):
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
@@ -45,8 +41,6 @@ def reseed(seed: int):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
-"""
-"""
 def simulate_one_seed(seed: int) -> List[List[float]]:
     L = 500
     reseed(seed)
@@ -66,8 +60,6 @@ def simulate_one_seed(seed: int) -> List[List[float]]:
     )
     return θ1
 
-"""
-"""
 def simulate_parallel(random_seeds: List[int]) -> List[List[float]]:
     results = [None] * len(random_seeds)
     with ProcessPoolExecutor() as executor:
@@ -77,8 +69,6 @@ def simulate_parallel(random_seeds: List[int]) -> List[List[float]]:
             results[idx] = future.result()
     return results
 
-"""
-"""
 def flatten_θ(θ: List[torch.tensor]):
     vecs = []
     for t in θ:
@@ -89,7 +79,6 @@ def flatten_θ(θ: List[torch.tensor]):
         vecs.append(arr.reshape(-1))
     return np.concatenate(vecs)
 
-
 def generate_θ_matrix(Last_θ_iterates):
     flattend_θs = []
     for θ in Last_θ_iterates:
@@ -97,13 +86,11 @@ def generate_θ_matrix(Last_θ_iterates):
         flattend_θs.append(flattended_θ)
     return np.vstack(flattend_θs)
 
-
 def project_θ_matrix_along_u(θ_matrix, u):
     u = np.asarray(u, float)
     u /= np.linalg.norm(u)
     T = θ_matrix @ u
     return T[T > 0]
-
 
 def run_URV_test(projections, lambdas=(1.5, 2.0, 3.0), m_top=30, B=2000, min_pos=50, rng=None):
     x = np.asarray(projections, float)
@@ -198,7 +185,6 @@ def run_URV_test(projections, lambdas=(1.5, 2.0, 3.0), m_top=30, B=2000, min_pos
         p=float(p_val)
     )
 
-
 BLUE = "#1f77b4"
 rng = np.random.default_rng(1338)
 seeds = rng.integers(0, 2**31 - 1, size=150, dtype=np.int64).tolist()
@@ -224,7 +210,6 @@ def simulate_one_seed_with_path(seed: int, keep_every: int = 50):
         path.append(θ_iterates[-1])
     return path
 
-
 def simulate_paths_parallel(random_seeds: List[int], keep_every: int = 50):
     all_paths = [None] * len(random_seeds)
     with ProcessPoolExecutor() as executor:
@@ -236,21 +221,115 @@ def simulate_paths_parallel(random_seeds: List[int], keep_every: int = 50):
     all_paths = [p[:Lmin] for p in all_paths]
     return all_paths
 
-
 def vectorize_theta_list(theta_list):
     return np.vstack([flatten_θ(θ) for θ in theta_list])
-
 
 def _emp_ccdf_sorted(x_sorted):
     n = x_sorted.size
     return (n - np.arange(n)) / n
 
-
 if __name__ == "__main__":
+    RUN_SIMULATION = True
+    rng = np.random.default_rng(1338)
+
+    if RUN_SIMULATION:
+        Last_θ_iterates = simulate_parallel(seeds)
+    else:
+        raise RuntimeError("Setze RUN_SIMULATION=True oder lade θ_iterates_collections hier.")
+
+    θ_Matrix = generate_θ_matrix(Last_θ_iterates)
+    R, D = θ_Matrix.shape
+
+    results = []
+    dirs = []
+    projections_by_dir = []
+
+    for j in range(D):
+        e_j = np.zeros(D, dtype=float)
+        e_j[j] = 1.0
+        projections = project_θ_matrix_along_u(θ_Matrix, e_j)
+        res = run_URV_test(projections, rng=rng)
+        print(f"Koordinate {j+1}/{D}: {res}")
+        results.append(res)
+        dirs.append(e_j)
+        projections_by_dir.append(projections)
+
+    pvals = [ (r['p'] if r.get('valid', False) else np.nan) for r in results ]
+    xpos = np.arange(1, len(results)+1)
+
+    plt.figure()
+    plt.bar(xpos, pvals, color="blue")
+    plt.axhline(0.10, linestyle=':', color='grey', linewidth=1)
+    plt.xlabel("Koordinate #")
+    plt.ylabel("URV p-Wert")
+    plt.title("URV-Tests je Koordinate (p-Werte)")
+    plt.tight_layout()
+    plt.show()
+
+    alphas = [ (r['alpha'] if r.get('valid', False) else np.nan) for r in results ]
+    ci_low = []
+    ci_high = []
+    for r in results:
+        if r.get('valid', False):
+            lo, hi = r['ci']
+            a = r['alpha']
+            ci_low.append(max(a - lo, 0.0))
+            ci_high.append(max(hi - a, 0.0))
+        else:
+            ci_low.append(np.nan)
+            ci_high.append(np.nan)
+    yerr = np.vstack([ci_low, ci_high])
+
+    plt.figure()
+    plt.errorbar(xpos, alphas, yerr=yerr, fmt='o', ecolor='grey', elinewidth=1, capsize=3)
+    plt.axhline(2.0, linestyle=':', color='grey', linewidth=1)
+    plt.xlabel("Koordinate #")
+    plt.ylabel("Tail-Index \\hat{\\alpha}")
+    plt.title("Tail-Index-Schätzungen je Koordinate (mit CI)")
+    plt.tight_layout()
+    plt.show()
+
     def _emp_ccdf(x_sorted):
         n = x_sorted.size
         idx = np.arange(n)
         return (n - idx) / n
+
+    MAX_SHOW = 3
+    shown = 0
+    for j, r in enumerate(results):
+        if not r.get('valid', False):
+            continue
+        x = np.asarray(projections_by_dir[j], float)
+        x = x[np.isfinite(x) & (x > 0)]
+        if x.size == 0:
+            continue
+        x = np.sort(x)
+        ccdf = _emp_ccdf(x)
+
+        u = np.quantile(x, 0.90)
+        c_emp = (x >= u).mean()
+        alpha_hat = float(r["alpha"])
+        xfit = x[x >= u]
+        if xfit.size > 0:
+            ccdf_fit = c_emp * (xfit / u) ** (-alpha_hat)
+        else:
+            xfit = x[-1:]
+            ccdf_fit = c_emp * (xfit / max(u, 1e-12)) ** (-alpha_hat)
+
+        plt.figure()
+        plt.loglog(x, ccdf, marker='o', linestyle='None',
+                   markerfacecolor='none', markeredgecolor="blue")
+        plt.loglog(xfit, ccdf_fit, color="blue", linewidth=2)
+        plt.xlabel("x (Projektion)")
+        plt.ylabel("CCDF  P(T > x)")
+        plt.title(f"CCDF vs. Pareto-Fit (Koordinate #{j+1})  α≈{alpha_hat:.3f}, p={r['p']:.3f}")
+        plt.tight_layout()
+        plt.show()
+
+        shown += 1
+        if shown >= MAX_SHOW:
+            break
+
     def _tail_ratio_grid(x, alpha_hat, lambdas=(1.5,2.0,3.0), m_top=30):
         x = np.asarray(x, float)
         x = x[np.isfinite(x) & (x > 0)]
@@ -277,6 +356,43 @@ if __name__ == "__main__":
                     grid[i, j2] = abs(r_hat - r_theo)
         return np.array(lam_list), xg, grid
 
+    idx_example = None
+    for j, r in enumerate(results):
+        if r.get('valid', False):
+            idx_example = j
+            break
+
+    if idx_example is not None:
+        x = projections_by_dir[idx_example]
+        lam_vec, x_grid, G = _tail_ratio_grid(x, float(results[idx_example]['alpha']), m_top=30)
+        if G is not None:
+            plt.figure()
+            plt.imshow(G, aspect='auto', interpolation='nearest')
+            plt.colorbar()
+            plt.yticks(np.arange(len(lam_vec)), [f"{lv:.1f}" for lv in lam_vec])
+            step = max(1, len(x_grid)//5)
+            plt.xticks(np.arange(len(x_grid))[::step],
+                       [f"{val:.2g}" for val in x_grid[::step]])
+            plt.xlabel("x (oberer Bereich)")
+            plt.ylabel("λ")
+            plt.title(f"Tail-Ratio-Abweichungen |R̂(λ,x) - λ^(-α)|  (Koordinate #{idx_example+1})")
+            plt.tight_layout()
+            plt.show()
+
+    heavy_idx = None
+    for j, r in enumerate(results):
+        if r.get('valid', False):
+            a = r['alpha']
+            lo, hi = r['ci']
+            p = r['p']
+            if (p > 0.10) and (a < 2.0) and (hi < 2.0):
+                heavy_idx = j
+                break
+
+    if heavy_idx is not None:
+        print(f"\nErste gefundene heavy-tailed Koordinate: #{heavy_idx+1}  (alpha≈{results[heavy_idx]['alpha']:.3f}, CI={results[heavy_idx]['ci']}, p={results[heavy_idx]['p']:.3f})")
+    else:
+        print("\nKeine Koordinate erfüllt (p>0.10 und alpha<2 mit CI<2).")
 
     SHOW_CONVERGENCE = True
     if SHOW_CONVERGENCE:
@@ -302,7 +418,7 @@ if __name__ == "__main__":
                 best_alpha = float(res["alpha"])
                 j_star = j
 
-        J = 40 
+        J = 15 
         idxs = np.unique(np.linspace(0, L_time - 1, J, dtype=int)).tolist()
         titles = [f"t={i*keep_every}" for i in idxs]
 
@@ -320,11 +436,11 @@ if __name__ == "__main__":
             tgrid.append(idx * keep_every)
 
         plt.figure()
-        plt.plot(tgrid, alpha_t, marker='o', color="blue")
+        plt.plot(tgrid, alpha_t, marker='o')
         plt.axhline(2.0, linestyle=':', color='grey', linewidth=1)
         plt.xlabel("Iteration")
-        plt.ylabel("Estimated Tail-Index α")
-        plt.title(f"Konvergenz von est. α: Koordinate #{j_star+1}")
+        plt.ylabel("Tail-Index \\hat{\\alpha}(t)")
+        plt.title(f"Konvergenz von \\hat{{\\alpha}}: Koordinate #{j_star+1}")
         plt.tight_layout()
         plt.show()
 
@@ -338,7 +454,6 @@ if __name__ == "__main__":
         plt.tight_layout()
         plt.show()
 
-        # CCDF-Subplots dynamisch (z.B. 3 Spalten)
         n = len(idxs)
         ncols = 3
         nrows = int(np.ceil(n / ncols))
@@ -381,4 +496,3 @@ if __name__ == "__main__":
         fig.suptitle(f"CCDF vs. Pareto-Fit über Zeit (Koordinate #{j_star+1})")
         plt.tight_layout()
         plt.show()
-
