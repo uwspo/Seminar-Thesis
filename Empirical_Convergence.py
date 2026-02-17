@@ -31,6 +31,10 @@ X = A @ x0
 η1, η2, η3, η4, η5 = 0.01, 0.3, 0.1, 0.001, 0.0003
 b = 32
 
+"""
+Resets the random seed for new random MLP Generation
+and new random Training Dataset Generation
+"""
 def reseed(seed: int):
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
